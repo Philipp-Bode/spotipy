@@ -7,6 +7,10 @@ import json
 import time
 import sys
 
+try:
+    import redis
+except ImportError:
+    pass
 # Workaround to support both python 2 & 3
 import six
 import six.moves.urllib.parse as urllibparse
@@ -99,7 +103,7 @@ class SpotifyOAuth(object):
     OAUTH_TOKEN_URL = 'https://accounts.spotify.com/api/token'
 
     def __init__(self, client_id, client_secret, redirect_uri,
-            state=None, scope=None, cache_path=None, proxies=None):
+            state=None, scope=None, cache_path=None, proxies=None, cache_store=None):
         '''
             Creates a SpotifyOAuth object
 
@@ -110,6 +114,7 @@ class SpotifyOAuth(object):
                  - state - security state
                  - scope - the desired scope of the request
                  - cache_path - path to location to save tokens
+                 - cache_store - dict of connection information for cache storage. None is filesystem.
         '''
 
         self.client_id = client_id
@@ -117,6 +122,7 @@ class SpotifyOAuth(object):
         self.redirect_uri = redirect_uri
         self.state=state
         self.cache_path = cache_path
+        self.cache_store = redis.StrictRedis(**cache_store) if cache_store else None
         self.scope=self._normalize_scope(scope)
         self.proxies = proxies
 
@@ -126,11 +132,13 @@ class SpotifyOAuth(object):
         token_info = None
         if self.cache_path:
             try:
-                f = open(self.cache_path)
-                token_info_string = f.read()
-                f.close()
-                token_info = json.loads(token_info_string)
+                if self.cache_store:
+                    token_info_string = self.cache_store.get(self.cache_path)
+                else:
+                    with open(self.cache_path) as f:
+                        token_info_string = f.read()
 
+                token_info = json.loads(token_info_string)
                 # if scopes don't match, then bail
                 if 'scope' not in token_info or not self._is_scope_subset(self.scope, token_info['scope']):
                     return None
@@ -138,19 +146,22 @@ class SpotifyOAuth(object):
                 if self.is_token_expired(token_info):
                     token_info = self.refresh_access_token(token_info['refresh_token'])
 
-            except IOError:
+            except (IOError, TypeError):
                 pass
         return token_info
 
     def _save_token_info(self, token_info):
+        token_info_string = json.dumps(token_info)
         if self.cache_path:
-            try:
-                f = open(self.cache_path, 'w')
-                f.write(json.dumps(token_info))
-                f.close()
-            except IOError:
-                self._warn("couldn't write token cache to " + self.cache_path)
-                pass
+            if self.cache_store:
+                self.cache_store.set(self.cache_path, token_info_string)
+            else:
+                try:
+                    with open(self.cache_path, 'w') as f:
+                        f.write(token_info_string)
+                except IOError:
+                    self._warn("couldn't write token cache to " + self.cache_path)
+                    pass
 
     def _is_scope_subset(self, needle_scope, haystack_scope):
         needle_scope = set(needle_scope.split()) if needle_scope else set()
