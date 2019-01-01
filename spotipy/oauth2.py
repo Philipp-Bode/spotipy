@@ -122,7 +122,7 @@ class SpotifyOAuth(object):
         self.redirect_uri = redirect_uri
         self.state=state
         self.cache_path = cache_path
-        self.cache_store = redis.StrictRedis(**cache_store) if cache_store else None
+        self.cache_store = redis.StrictRedis.from_url(cache_store) if cache_store else None
         self.scope=self._normalize_scope(scope)
         self.proxies = proxies
 
